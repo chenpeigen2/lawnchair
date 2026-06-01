@@ -13,7 +13,14 @@ bin
 .kotlin
 local.properties
 build
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
 keystore.properties
 *.jks
 __pycache__
