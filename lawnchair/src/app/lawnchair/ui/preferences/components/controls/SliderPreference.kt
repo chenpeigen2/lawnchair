@@ -16,11 +16,13 @@
 
 package app.lawnchair.ui.preferences.components.controls
 
+import android.os.VibrationAttributes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +33,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,9 +50,16 @@ import app.lawnchair.ui.theme.LawnchairTheme
 import app.lawnchair.ui.util.preview.PreferenceGroupPreviewContainer
 import app.lawnchair.ui.util.preview.PreviewLawnchair
 import com.android.launcher3.R
+import com.android.launcher3.Utilities
 import com.android.launcher3.util.MSDLPlayerWrapper
 import com.google.android.msdl.data.model.MSDLToken
+import com.google.android.msdl.domain.InteractionProperties
 import kotlin.math.roundToInt
+
+private enum class SliderThreshold {
+    START,
+    END,
+}
 
 @Composable
 fun SliderPreference(
@@ -107,6 +117,7 @@ fun SliderPreference(
     )
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SliderPreference(
     label: String,
@@ -120,7 +131,17 @@ private fun SliderPreference(
     enabled: Boolean = true,
 ) {
     var sliderValue by remember { mutableFloatStateOf(value) }
+    var thresholdReached by remember { mutableStateOf<SliderThreshold?>(null) }
     val mMSDLPlayerWrapper = MSDLPlayerWrapper.INSTANCE.get(LocalContext.current)
+    val touchVibrationAttributes = remember {
+        if (Utilities.ATLEAST_S) {
+            VibrationAttributes.Builder()
+                .setUsage(VibrationAttributes.USAGE_TOUCH)
+                .build()
+        } else {
+            null
+        }
+    }
     val getAppropriateHaptic = if (step == 0f) {
         MSDLToken.DRAG_INDICATOR_CONTINUOUS
     } else {
@@ -129,6 +150,7 @@ private fun SliderPreference(
 
     DisposableEffect(value) {
         sliderValue = value
+        thresholdReached = null
         onDispose { }
     }
 
@@ -137,10 +159,7 @@ private fun SliderPreference(
             Row(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp)
-                    .padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     text = label,
@@ -167,25 +186,57 @@ private fun SliderPreference(
                 }
             }
         },
+        modifier = modifier,
         description = {
             Slider(
                 value = sliderValue,
                 onValueChange = { newValue ->
                     sliderValue = newValue
-                    mMSDLPlayerWrapper.playToken(getAppropriateHaptic)
+                    val threshold = when {
+                        newValue <= valueRange.start -> SliderThreshold.START
+                        newValue >= valueRange.endInclusive -> SliderThreshold.END
+                        else -> null
+                    }
+                    if (threshold != null) {
+                        if (threshold != thresholdReached) {
+                            thresholdReached = threshold
+                            mMSDLPlayerWrapper.playToken(
+                                MSDLToken.DRAG_THRESHOLD_INDICATOR_LIMIT,
+                            )
+                        }
+                    } else {
+                        thresholdReached = null
+                        val range = valueRange.endInclusive - valueRange.start
+                        val scale = if (range == 0f) {
+                            1f
+                        } else {
+                            ((newValue - valueRange.start) / range).coerceIn(0f, 1f)
+                        }
+                        val properties = touchVibrationAttributes?.let {
+                            InteractionProperties.DynamicVibrationScale(
+                                scale = scale,
+                                vibrationAttributes = it,
+                            )
+                        }
+                        if (properties == null) {
+                            mMSDLPlayerWrapper.playToken(getAppropriateHaptic)
+                        } else {
+                            // Dynamic haptic scaling based on value,
+                            // the haptic goes from none/light to heavy depending on the value.
+                            // Supported on S+ platform
+                            mMSDLPlayerWrapper.playToken(getAppropriateHaptic, properties)
+                        }
+                    }
                 },
                 onValueChangeFinished = { onValueChangeFinished(sliderValue) },
                 valueRange = valueRange,
                 steps = getSteps(valueRange, step),
                 modifier = Modifier
-                    .padding(top = 2.dp, bottom = 12.dp)
-                    .padding(horizontal = 14.dp)
+                    .padding(top = 2.dp, bottom = 8.dp)
                     .height(24.dp),
                 enabled = enabled,
             )
         },
-        modifier = modifier,
-        applyPaddings = false,
     )
 }
 
@@ -216,16 +267,14 @@ private fun SliderPreferencePreview(
 ) {
     LawnchairTheme {
         PreferenceGroupPreviewContainer {
-            Item {
-                SliderPreference(
-                    label = "Label",
-                    value = sliderValue,
-                    onValueChangeFinished = {},
-                    valueRange = 0f..1f,
-                    step = 0.1f,
-                    showAsPercentage = true,
-                )
-            }
+            SliderPreference(
+                label = "Label",
+                value = sliderValue,
+                onValueChangeFinished = {},
+                valueRange = 0f..1f,
+                step = 0.1f,
+                showAsPercentage = true,
+            )
         }
     }
 }
